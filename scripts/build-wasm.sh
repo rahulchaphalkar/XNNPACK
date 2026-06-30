@@ -29,8 +29,10 @@ CMAKE_ARGS+=("-DXNNPACK_BUILD_BENCHMARKS=ON")
 CMAKE_ARGS+=("-DXNNPACK_BUILD_TESTS=ON")
 
 
-# Use-specified CMake arguments go last to allow overridding defaults
-CMAKE_ARGS+=($@)
+# User-specified CMake arguments go last to allow overriding defaults.
+# Preserve argument boundaries so values containing spaces (e.g. linker flags)
+# are passed through intact.
+CMAKE_ARGS+=("$@")
 
 cd build/wasm && emcmake cmake ../.. \
     "${CMAKE_ARGS[@]}"
