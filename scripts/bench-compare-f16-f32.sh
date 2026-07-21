@@ -35,14 +35,65 @@ IGEMM_SHAPES=(
   "14 14 3 3 1 1 1 1 512 512"
 )
 
+# Depthwise convolution shapes (dwconv, dwconv2d-chw):
+# input_h input_w kernel_h kernel_w pad_h pad_w subsampling dilation channels
+DWCONV_SHAPES=(
+  "112 112 3 3 1 1 1 1 64"
+  "56 56 3 3 1 1 1 1 128"
+  "28 28 3 3 1 1 1 1 256"
+  "14 14 3 3 1 1 1 1 512"
+)
+
+# HWC->CHW convolution shapes (conv-hwc2chw):
+# input_h input_w output_channels
+CONV_HWC2CHW_SHAPES=(
+  "224 224 32"
+  "192 192 32"
+  "128 128 64"
+  "96 96 128"
+)
+
 # Supported operation groups.
 # Name maps to binary stem without backend-specific extension.
 declare -A OP_TO_PAIR
 OP_TO_PAIR[gemm]="f32-gemm-bench:f16-gemm-bench"
 OP_TO_PAIR[gemm_minmax]="f32-gemm-minmax-bench:f16-gemm-minmax-bench"
 OP_TO_PAIR[igemm]="f32-igemm-bench:f16-igemm-bench"
+OP_TO_PAIR[dwconv]="f32-dwconv-bench:f16-dwconv-bench"
+OP_TO_PAIR[dwconv2d_chw]="f32-dwconv2d-chw-bench:f16-dwconv2d-chw-bench"
+OP_TO_PAIR[conv_hwc2chw]="f32-conv-hwc2chw-bench:f16-conv-hwc2chw-bench"
+OP_TO_PAIR[raddstoreexpminusmax]="f32-raddstoreexpminusmax-bench:f16-raddstoreexpminusmax-bench"
+OP_TO_PAIR[vcmul]="f32-vcmul-bench:f16-vcmul-bench"
+OP_TO_PAIR[qd8_qb4w_gemm]="qd8-f32-qb4w-gemm-bench:qd8-f16-qb4w-gemm-bench"
+OP_TO_PAIR[qd8_qc2w_gemm]="qd8-f32-qc2w-gemm-bench:qd8-f16-qc2w-gemm-bench"
+OP_TO_PAIR[qd8_qc4w_gemm]="qd8-f32-qc4w-gemm-bench:qd8-f16-qc4w-gemm-bench"
+OP_TO_PAIR[qd8_qc8w_gemm]="qd8-f32-qc8w-gemm-bench:qd8-f16-qc8w-gemm-bench"
 
-OPS=(gemm gemm_minmax igemm)
+# Maps each op to the shape schema it consumes (used by shapes_for_op).
+#   mnk          -> SHAPES (M N K)
+#   igemm        -> IGEMM_SHAPES
+#   dwconv       -> DWCONV_SHAPES
+#   conv_hwc2chw -> CONV_HWC2CHW_SHAPES
+#   builtin      -> benchmark uses its own fixed shape sweep (no shape args)
+declare -A OP_TO_SHAPE_KIND
+OP_TO_SHAPE_KIND[gemm]="mnk"
+OP_TO_SHAPE_KIND[gemm_minmax]="mnk"
+OP_TO_SHAPE_KIND[igemm]="igemm"
+OP_TO_SHAPE_KIND[dwconv]="dwconv"
+OP_TO_SHAPE_KIND[dwconv2d_chw]="dwconv"
+OP_TO_SHAPE_KIND[conv_hwc2chw]="conv_hwc2chw"
+OP_TO_SHAPE_KIND[raddstoreexpminusmax]="builtin"
+OP_TO_SHAPE_KIND[vcmul]="builtin"
+OP_TO_SHAPE_KIND[qd8_qb4w_gemm]="mnk"
+OP_TO_SHAPE_KIND[qd8_qc2w_gemm]="mnk"
+OP_TO_SHAPE_KIND[qd8_qc4w_gemm]="mnk"
+OP_TO_SHAPE_KIND[qd8_qc8w_gemm]="mnk"
+
+OPS=(
+  gemm gemm_minmax igemm
+  dwconv dwconv2d_chw conv_hwc2chw raddstoreexpminusmax vcmul
+  qd8_qb4w_gemm qd8_qc2w_gemm qd8_qc4w_gemm qd8_qc8w_gemm
+)
 
 usage() {
   cat <<'EOF'
@@ -58,7 +109,11 @@ Options:
   --num-threads <int>                  Benchmark --num_threads value (default: 1)
   --min-iters <int>                    Benchmark --benchmark_min_iters (default: 50)
   --repeats <int>                      Number of repeated runs per shape (default: 3)
-  --ops <csv>                          Ops from: gemm,gemm_minmax,igemm
+  --ops <csv>                          Ops from: gemm,gemm_minmax,igemm,
+                                       dwconv,dwconv2d_chw,conv_hwc2chw,
+                                       raddstoreexpminusmax,vcmul,
+                                       qd8_qb4w_gemm,qd8_qc2w_gemm,
+                                       qd8_qc4w_gemm,qd8_qc8w_gemm
   --shape "M N K"                      Add one shape triple, may be repeated
   --dry-run                            Print commands without running
   -h, --help                           Show this message
@@ -66,6 +121,7 @@ Options:
 Examples:
   scripts/bench-compare-f16-f32.sh --backend native --num-threads 4
   scripts/bench-compare-f16-f32.sh --backend wasm --wasm-runtime d8 --ops gemm,igemm
+  scripts/bench-compare-f16-f32.sh --backend native --ops dwconv,qd8_qc8w_gemm
 EOF
 }
 
@@ -115,8 +171,10 @@ run_one() {
   local wasm_local_json="${backend}_${op}_${precision}_${safe_shape}_r${repeat_idx}.json"
 
   local shape_args=()
-  # shellcheck disable=SC2206
-  shape_args=($shape)
+  if [[ "$shape" != "builtin" ]]; then
+    # shellcheck disable=SC2206
+    shape_args=($shape)
+  fi
 
   local common_args=(
     "${shape_args[@]}"
@@ -168,11 +226,24 @@ run_one() {
 
 shapes_for_op() {
   local op="$1"
-  if [[ "$op" == "igemm" ]]; then
-    printf '%s\n' "${IGEMM_SHAPES[@]}"
-  else
-    printf '%s\n' "${SHAPES[@]}"
-  fi
+  case "${OP_TO_SHAPE_KIND[$op]:-mnk}" in
+    igemm)
+      printf '%s\n' "${IGEMM_SHAPES[@]}"
+      ;;
+    dwconv)
+      printf '%s\n' "${DWCONV_SHAPES[@]}"
+      ;;
+    conv_hwc2chw)
+      printf '%s\n' "${CONV_HWC2CHW_SHAPES[@]}"
+      ;;
+    builtin)
+      # Benchmark defines its own fixed shape sweep; run once with no shape args.
+      printf '%s\n' "builtin"
+      ;;
+    *)
+      printf '%s\n' "${SHAPES[@]}"
+      ;;
+  esac
 }
 
 validate_backend() {
