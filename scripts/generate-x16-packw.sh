@@ -50,4 +50,8 @@ tools/xngen src/x16-packw/avx512skx.c.in -D NR=32 -D PREFETCH=1 -D KBLOCK=16 -o 
 tools/xngen src/x16-packw/avx512skx.c.in -D NR=64 -D PREFETCH=0 -D KBLOCK=16 -o src/x16-packw/gen/x16-packw-x64-gemm-goi-avx512skx-u16.c &
 tools/xngen src/x16-packw/avx512skx.c.in -D NR=64 -D PREFETCH=1 -D KBLOCK=16 -o src/x16-packw/gen/x16-packw-x64-gemm-goi-avx512skx-u16-prfm.c &
 
+################################### WASM SIMD ###################################
+tools/xngen src/x16-packw/wasmsimd.c.in -D NR=8  -D KBLOCK=8 -o src/x16-packw/gen/x16-packw-x8-gemm-goi-wasmsimd-u8.c &
+tools/xngen src/x16-packw/wasmsimd.c.in -D NR=16 -D KBLOCK=8 -o src/x16-packw/gen/x16-packw-x16-gemm-goi-wasmsimd-u8.c &
+
 wait

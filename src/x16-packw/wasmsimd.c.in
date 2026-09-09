@@ -1,0 +1,298 @@
+// Copyright 2026 Google LLC
+//
+// This source code is licensed under the BSD-style license found in the
+// LICENSE file in the root directory of this source tree.
+
+$assert NR >= 8
+$assert NR % 8 == 0
+$assert KBLOCK == 8
+
+#include <assert.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#include <wasm_simd128.h>
+
+#include "src/xnnpack/common.h"
+#include "src/xnnpack/packw.h"
+
+
+void xnn_x16_packw_gemm_goi_ukernel_x${NR}__wasmsimd_u${KBLOCK}(
+  size_t g,
+  size_t nc,
+  size_t kc,
+  size_t nr,
+  size_t kr,
+  size_t sr,
+  const uint16_t* weights,
+  const uint16_t* bias,
+  const void* scale,
+  uint16_t* packed_weights,
+  size_t extra_bytes,
+  const void* params)
+{
+  assert(g != 0);
+  assert(nc != 0);
+  assert(kc != 0);
+  assert(nr == ${NR});   // This kernel is for NR=${NR}
+  assert(kr == 1);
+  assert(sr == 1);
+  assert(weights != NULL);
+  assert(packed_weights != NULL);
+
+  const uint16_t* b = bias;
+  uint16_t* packed_w = packed_weights;
+  do {
+    // NC main loop multiple of ${NR}
+    const uint16_t* w0 = weights;
+    size_t n = nc;
+
+    for (; n >= ${NR}; n -= ${NR}) {
+      if XNN_LIKELY(b != NULL) {
+        $for N in range(0, NR, 8):
+          const v128_t vb${N} = wasm_v128_load(b + ${N});
+        b += ${NR};
+        $for N in range(0, NR, 8):
+          wasm_v128_store(packed_w + ${N}, vb${N});
+      } else {
+        const v128_t vzero = wasm_i16x8_splat(0);
+        $for N in range(0, NR, 8):
+          wasm_v128_store(packed_w + ${N}, vzero);
+      }
+      packed_w += ${NR};
+
+      $for N in range(1, NR):
+        const uint16_t* w${N} = w${N-1} + kc;
+
+      // KC main loop multiple of ${KBLOCK}
+      size_t k = kc;
+      for (; k >= ${KBLOCK}; k -= ${KBLOCK}) {
+        $for N in range(0, NR, 8):
+          $for L in range(8):
+            const v128_t v3_${N+L} = wasm_v128_load(w${N+L});
+            w${N+L} += ${KBLOCK};
+
+        $for N in range(0, NR, 8):
+          $for L in range(4):
+            const v128_t v2_${N+2*L} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v2_${N+2*L+1} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+          $for L in range(4):
+            const v128_t v1_${N+2*L} = wasm_v16x8_shuffle(v2_${N+L}, v2_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N+2*L+1} = wasm_v16x8_shuffle(v2_${N+L}, v2_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+          $for L in range(4):
+            const v128_t w${N+2*L} = wasm_v16x8_shuffle(v1_${N+L}, v1_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t w${N+2*L+1} = wasm_v16x8_shuffle(v1_${N+L}, v1_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+
+        $for K in range(8):
+          $for N in range(0, NR, 8):
+            wasm_v128_store(packed_w + ${N + K*NR}, w${N+K});
+        packed_w += ${NR * KBLOCK};
+      }
+
+      // KC remainder (1..7)
+      if XNN_UNLIKELY(k != 0) {
+        assert(k >= 1);
+        assert(k <= 7);
+
+        if (k & 4) {
+          $for N in range(0, NR, 8):
+            $for L in range(8):
+              const v128_t v3_${N+L} = wasm_v128_load64_zero(w${N+L});
+              w${N+L} += 4;
+
+          $for N in range(0, NR, 8):
+            $for L in range(4):
+              const v128_t v2_${N+2*L} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+              const v128_t v2_${N+2*L+1} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+            $for L in range(4):
+              const v128_t v1_${N+2*L} = wasm_v16x8_shuffle(v2_${N+L}, v2_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+              const v128_t v1_${N+2*L+1} = wasm_v16x8_shuffle(v2_${N+L}, v2_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+            $for L in range(2):
+              const v128_t w${N+2*L} = wasm_v16x8_shuffle(v1_${N+L}, v1_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+              const v128_t w${N+2*L+1} = wasm_v16x8_shuffle(v1_${N+L}, v1_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+
+          $for K in range(4):
+            $for N in range(0, NR, 8):
+              wasm_v128_store(packed_w + ${N + K*NR}, w${N+K});
+          packed_w += ${NR * 4};
+        }
+
+        if (k & 2) {
+          $for N in range(0, NR, 8):
+            $for L in range(8):
+              const v128_t v3_${N+L} = wasm_v128_load32_zero(w${N+L});
+              w${N+L} += 2;
+
+          $for N in range(0, NR, 8):
+            $for L in range(4):
+              const v128_t v2_${N+2*L} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N} = wasm_v16x8_shuffle(v2_${N}, v2_${N+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N+4} = wasm_v16x8_shuffle(v2_${N+2}, v2_${N+6}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t w${N} = wasm_v16x8_shuffle(v1_${N}, v1_${N+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t w${N+1} = wasm_v16x8_shuffle(v1_${N}, v1_${N+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+
+          $for K in range(2):
+            $for N in range(0, NR, 8):
+              wasm_v128_store(packed_w + ${N + K*NR}, w${N+K});
+          packed_w += ${NR * 2};
+        }
+
+        if (k & 1) {
+          $for N in range(0, NR, 8):
+            $for L in range(8):
+              const v128_t v3_${N+L} = wasm_v128_load16_lane(w${N+L}, wasm_i16x8_splat(0), 0);
+              w${N+L} += 1;
+
+          $for N in range(0, NR, 8):
+            $for L in range(4):
+              const v128_t v2_${N+2*L} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N} = wasm_v16x8_shuffle(v2_${N}, v2_${N+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N+4} = wasm_v16x8_shuffle(v2_${N+2}, v2_${N+6}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t w${N} = wasm_v16x8_shuffle(v1_${N}, v1_${N+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+
+          $for N in range(0, NR, 8):
+            wasm_v128_store(packed_w + ${N}, w${N});
+          packed_w += ${NR};
+        }
+      }
+      packed_w = (uint16_t*) ((uintptr_t) packed_w + extra_bytes);
+      w0 = w${NR-1};
+    }
+
+    // NC remainder (1..${NR-1})
+    if XNN_UNLIKELY(n != 0) {
+      assert(n >= 1);
+      assert(n <= ${NR-1});
+      if XNN_LIKELY(b != NULL) {
+        size_t nb = n;
+        do {
+          *packed_w++ = *b++;
+        } while (--nb != 0);
+        packed_w += (${NR} - n);
+      } else {
+        const v128_t vzero = wasm_i16x8_splat(0);
+        $for N in range(0, NR, 8):
+          wasm_v128_store(packed_w + ${N}, vzero);
+        packed_w += ${NR};
+      }
+
+      // NR remainder has less than ${NR} rows so last row is not loaded
+      $for N in range(1, NR-1):
+        const uint16_t* w${N} = w${N-1} + kc;
+        $if N % 2 == 0:
+          if XNN_UNPREDICTABLE(n <= ${N}) {
+            w${N} = w${N-1};
+          }
+        $else:
+          if XNN_UNPREDICTABLE(n < ${N+1}) {
+            w${N} = w${N-1};
+          }
+
+      // KC main loop multiple of ${KBLOCK}
+      size_t k = kc;
+      for (; k >= ${KBLOCK}; k -= ${KBLOCK}) {
+        $for N in range(0, NR, 8):
+          $for L in range(8):
+            $if N+L == NR-1:
+              const v128_t v3_${N+L} = wasm_i16x8_splat(0);
+            $else:
+              const v128_t v3_${N+L} = wasm_v128_load(w${N+L});
+              w${N+L} += ${KBLOCK};
+
+        $for N in range(0, NR, 8):
+          $for L in range(4):
+            const v128_t v2_${N+2*L} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v2_${N+2*L+1} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+          $for L in range(4):
+            const v128_t v1_${N+2*L} = wasm_v16x8_shuffle(v2_${N+L}, v2_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N+2*L+1} = wasm_v16x8_shuffle(v2_${N+L}, v2_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+          $for L in range(4):
+            const v128_t w${N+2*L} = wasm_v16x8_shuffle(v1_${N+L}, v1_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t w${N+2*L+1} = wasm_v16x8_shuffle(v1_${N+L}, v1_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+
+        $for K in range(8):
+          $for N in range(0, NR, 8):
+            wasm_v128_store(packed_w + ${N + K*NR}, w${N+K});
+        packed_w += ${NR * KBLOCK};
+      }
+
+      // KC remainder (1..7)
+      if XNN_UNLIKELY(k != 0) {
+        assert(k >= 1);
+        assert(k <= 7);
+
+        if (k & 4) {
+          $for N in range(0, NR, 8):
+            $for L in range(8):
+              $if N+L == NR-1:
+                const v128_t v3_${N+L} = wasm_i16x8_splat(0);
+              $else:
+                const v128_t v3_${N+L} = wasm_v128_load64_zero(w${N+L});
+                w${N+L} += 4;
+
+          $for N in range(0, NR, 8):
+            $for L in range(4):
+              const v128_t v2_${N+2*L} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+              const v128_t v2_${N+2*L+1} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+            $for L in range(4):
+              const v128_t v1_${N+2*L} = wasm_v16x8_shuffle(v2_${N+L}, v2_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+              const v128_t v1_${N+2*L+1} = wasm_v16x8_shuffle(v2_${N+L}, v2_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+            $for L in range(2):
+              const v128_t w${N+2*L} = wasm_v16x8_shuffle(v1_${N+L}, v1_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+              const v128_t w${N+2*L+1} = wasm_v16x8_shuffle(v1_${N+L}, v1_${N+L+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+
+          $for K in range(4):
+            $for N in range(0, NR, 8):
+              wasm_v128_store(packed_w + ${N + K*NR}, w${N+K});
+          packed_w += ${NR * 4};
+        }
+
+        if (k & 2) {
+          $for N in range(0, NR, 8):
+            $for L in range(8):
+              $if N+L == NR-1:
+                const v128_t v3_${N+L} = wasm_i16x8_splat(0);
+              $else:
+                const v128_t v3_${N+L} = wasm_v128_load32_zero(w${N+L});
+                w${N+L} += 2;
+
+          $for N in range(0, NR, 8):
+            $for L in range(4):
+              const v128_t v2_${N+2*L} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N} = wasm_v16x8_shuffle(v2_${N}, v2_${N+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N+4} = wasm_v16x8_shuffle(v2_${N+2}, v2_${N+6}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t w${N} = wasm_v16x8_shuffle(v1_${N}, v1_${N+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t w${N+1} = wasm_v16x8_shuffle(v1_${N}, v1_${N+4}, 4, 12, 5, 13, 6, 14, 7, 15);
+
+          $for K in range(2):
+            $for N in range(0, NR, 8):
+              wasm_v128_store(packed_w + ${N + K*NR}, w${N+K});
+          packed_w += ${NR * 2};
+        }
+
+        if (k & 1) {
+          $for N in range(0, NR, 8):
+            $for L in range(8):
+              $if N+L == NR-1:
+                const v128_t v3_${N+L} = wasm_i16x8_splat(0);
+              $else:
+                const v128_t v3_${N+L} = wasm_v128_load16_lane(w${N+L}, wasm_i16x8_splat(0), 0);
+                w${N+L} += 1;
+
+          $for N in range(0, NR, 8):
+            $for L in range(4):
+              const v128_t v2_${N+2*L} = wasm_v16x8_shuffle(v3_${N+L}, v3_${N+L+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N} = wasm_v16x8_shuffle(v2_${N}, v2_${N+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t v1_${N+4} = wasm_v16x8_shuffle(v2_${N+2}, v2_${N+6}, 0, 8, 1, 9, 2, 10, 3, 11);
+            const v128_t w${N} = wasm_v16x8_shuffle(v1_${N}, v1_${N+4}, 0, 8, 1, 9, 2, 10, 3, 11);
+
+          $for N in range(0, NR, 8):
+            wasm_v128_store(packed_w + ${N}, w${N});
+          packed_w += ${NR};
+        }
+      }
+      packed_w = (uint16_t*) ((uintptr_t) packed_w + extra_bytes);
+    }
+    weights += nc * kc;
+  } while (--g != 0);
+}

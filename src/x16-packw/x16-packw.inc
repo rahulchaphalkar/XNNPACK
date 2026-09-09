@@ -51,3 +51,8 @@ XNN_UKERNEL(xnn_arch_x86_avx512skx, xnn_x16_packw_gemm_goi_ukernel_x32__avx512sk
 XNN_UKERNEL(xnn_arch_x86_avx512skx, xnn_x16_packw_gemm_goi_ukernel_x64__avx512skx_u16, 64, 1, 1, 16, 1)
 XNN_UKERNEL(xnn_arch_x86_avx512skx, xnn_x16_packw_gemm_goi_ukernel_x64__avx512skx_u16_prfm, 64, 1, 1, 16, 1)
 #endif  // XNN_ENABLE_AVX512SKX && (XNN_ARCH_X86 || XNN_ARCH_X86_64)
+
+#if XNN_ARCH_WASMSIMD || XNN_ARCH_WASMRELAXEDSIMD
+XNN_UKERNEL(xnn_arch_none, xnn_x16_packw_gemm_goi_ukernel_x8__wasmsimd_u8, 8, 1, 1, 8, 1)
+XNN_UKERNEL(xnn_arch_none, xnn_x16_packw_gemm_goi_ukernel_x16__wasmsimd_u8, 16, 1, 1, 8, 1)
+#endif  // XNN_ARCH_WASMSIMD || XNN_ARCH_WASMRELAXEDSIMD
