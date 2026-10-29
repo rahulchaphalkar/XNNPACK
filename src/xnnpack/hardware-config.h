@@ -231,6 +231,8 @@ static inline bool xnn_is_f16_compatible_config(
   return (hardware_config->arch_flags & xnn_arch_x86_f16c) && (hardware_config->arch_flags & xnn_arch_x86_avx);
 #elif (XNN_ARCH_RISCV && XNN_ENABLE_RISCV_FP16_VECTOR)
   return hardware_config->arch_flags & xnn_arch_riscv_vector_fp16_arith;
+#elif XNN_ARCH_WASMRELAXEDSIMDFP16
+  return true;
 #else
   return false;
 #endif
@@ -268,6 +270,8 @@ static inline bool xnn_is_f16_supported_natively(
   return (hardware_config->arch_flags & xnn_arch_arm_neon_fp16_arith);
 #elif (XNN_ARCH_RISCV && XNN_ENABLE_RISCV_FP16_VECTOR)
   return (hardware_config->arch_flags & xnn_arch_riscv_vector_fp16_arith);
+#elif XNN_ARCH_WASMRELAXEDSIMDFP16
+  return true;
 #else
   return false;
 #endif
